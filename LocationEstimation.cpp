@@ -9,6 +9,15 @@
 
 const int LocationEstimation::MAX_WIDTH = 600;
 const int LocationEstimation::MAX_HEIGHT = 400;
+const int LocationEstimation::CURSOR_SIZE = 8;
+const int LocationEstimation::RAY_DISTANCE = 150;
+const int LocationEstimation::RAY_WIDTH = 2;
+
+const bool LocationEstimation::ENABLE_NOISE = true;
+const bool LocationEstimation::ENABLE_FAILURE = true;
+
+const double LocationEstimation::RAY_FAILURE_RATE = 0.01;
+const double LocationEstimation::RAY_MAX_NOISE = RAY_DISTANCE / 40;
 
 cv::Mat LocationEstimation::map;
 
@@ -19,7 +28,7 @@ cv::Rect getMaxRectSingleContour(const cv::Mat1b& src) {
     cv::Mat1f height(src.rows, src.cols, float(0));
 
     cv::Rect maxRect(0, 0, 0, 0);
-    float maxArea = 0;
+    double maxArea = 0;
 
     for (int r = 0; r < src.rows; r++) {
         for (int c = 0; c < src.cols; c++) {
@@ -50,6 +59,7 @@ cv::Rect getMaxRect(cv::Mat binaryImg) {
 	cv::Rect maxRect(0, 0, 0, 0);
 	int maxArea = 0;
 	for (int i = 0; i < contours.size(); ++i) {
+		std::cout << i << std::endl;
 		cv::Mat maskSingleContour(binaryImg.rows, binaryImg.cols, uchar(0));
 		cv::drawContours(maskSingleContour, contours, i, cv::Scalar(255),
 				CV_FILLED);
@@ -64,13 +74,18 @@ cv::Rect getMaxRect(cv::Mat binaryImg) {
 	return maxRect;
 }
 
-void LocationEstimation::start(const char* imagePath) {
+void LocationEstimation::start(const char* imagePath, double scale) {
 	cv::namedWindow("display", CV_WINDOW_AUTOSIZE);
 
 	std::cout << "Image path: " << imagePath << std::endl;
 
 	// Load source image
 	cv::Mat srcImg = cv::imread(imagePath, cv::IMREAD_UNCHANGED);
+	while (srcImg.cols * scale * srcImg.rows * scale > 800 * 800) {
+		scale /= 2;
+		std::cout << "Image too large, decreasing scale by a factor of 2" << std::endl;
+	}
+	cv::resize(srcImg, srcImg, cv::Size(srcImg.cols * scale, srcImg.rows * scale), 0, 0, cv::INTER_NEAREST);
 	std::cout << srcImg.cols << " x " << srcImg.rows << std::endl;
 
 	// Create grayscale and then black and white image
@@ -78,22 +93,36 @@ void LocationEstimation::start(const char* imagePath) {
 	cv::cvtColor(srcImg, grayImg, cv::COLOR_BGR2GRAY);
 	cv::Mat binaryImg = grayImg > 128;
 
+	// Save copy of the map
 	cv::cvtColor(binaryImg, map, cv::COLOR_GRAY2BGR);
 
+	// Determine starting position (largest available rectangle)
 	cv::Rect maxRect = getMaxRect(binaryImg);
+	//cv::rectangle(map, maxRect, cv::Scalar(220, 255, 220), -1); // Draws starting area
 	pos = cv::Point(maxRect.x + (maxRect.width - 1) / 2,
 			maxRect.y + (maxRect.height - 1) / 2);
 
 	while (true) {
+
 		cv::Mat display = map.clone();
-		//cv::rectangle(display, maxRect, cv::Scalar(200, 255, 200), -1);
-		cv::circle(display, pos, std::max(display.cols, display.rows) / 200,
-				cv::Scalar(0, 0, 255), -1);
-		cv::Mat resized = resizeImage(display);
+
+		// Create the display image
+		double scale = std::max((double) MAX_WIDTH / display.cols,
+				(double) MAX_HEIGHT / display.rows);
+		display = resizeDisplay(display, scale);
+
+		int numRays = 8;
+		for (int i = 0; i < numRays; i++) {
+			double dist = rayCast(pos.x, pos.y, i * M_PI / numRays * 2 ,
+					RAY_DISTANCE / scale, &display, scale);
+			std::cout << dist << "\t";
+		}
+		std::cout << std::endl;
 
 		// Display image
-		cv::imshow("display", resized);
+		cv::imshow("display", display);
 
+		// Handle keyboard input
 		int key = cv::waitKey(1);
 		if (key > -1) {
 			switch(key) {
@@ -105,6 +134,58 @@ void LocationEstimation::start(const char* imagePath) {
 			default: std::cout << "Key pressed: " << key << std::endl;
 			}
 		}
+	}
+}
+
+double LocationEstimation::rayCast(int x, int y, double angle, double maxDist) {
+	return rayCast(x, y, angle, maxDist, nullptr, 1);
+}
+
+double LocationEstimation::rayCast(int x, int y, double angle, double maxDist,
+		cv::Mat* display, double scale) {
+	double stepSize = std::min(1 / scale, 0.05);
+	std::vector<std::pair<double, double> > rayList;
+	bool failed = false;
+	for (int i = 0; i * stepSize < maxDist; i++) {
+		double dist = i * stepSize;
+		double targetXf = x + 0.5 + std::cos(angle) * dist;
+		double targetYf = y + 0.5 + std::sin(angle) * dist;
+		int targetX = targetXf;
+		int targetY = targetYf;
+		if (display != nullptr) {
+			int scaledX = targetXf * scale;
+			int scaledY = targetYf * scale;
+			rayList.push_back(std::pair<double, double>(scaledX, scaledY));
+		}
+		if (!failed && isBarrier(targetX, targetY)) {
+			if (ENABLE_FAILURE && rand() / (RAND_MAX + 1.0) < RAY_FAILURE_RATE) {
+				failed = true;
+				continue;
+			}
+			for (int j = 0; j < rayList.size(); j++) {
+				cv::rectangle(*display, cv::Rect(rayList[j].first, rayList[j].second, RAY_WIDTH, RAY_WIDTH), cv::Scalar(100, 100, 255), -1);
+			}
+			double noisyDistance = dist + (ENABLE_NOISE ? 1 : 0)
+					* rand() / (RAND_MAX + 1.0) * RAY_MAX_NOISE / scale;
+			double hitX = (x + 0.5 + std::cos(angle) * noisyDistance) * scale;
+			double hitY = (y + 0.5 + std::sin(angle) * noisyDistance) * scale;
+			cv::circle(*display, cv::Point(hitX, hitY), RAY_WIDTH * 2, cv::Scalar(0, 0, 255), -1);
+			return noisyDistance;
+		}
+	}
+	int n = rayList.size();
+	if (ENABLE_FAILURE && rand() / (RAND_MAX + 1.0) < RAY_FAILURE_RATE) {
+		n = rand() / (RAND_MAX + 1.0) * rayList.size();
+	}
+	for (int j = 0; j < n; j++) {
+		cv::rectangle(*display, cv::Rect(rayList[j].first, rayList[j].second, RAY_WIDTH, RAY_WIDTH), cv::Scalar(100, 100, 255), -1);
+	}
+	if (n == rayList.size()) {
+		return -1;
+	}
+	else {
+		cv::circle(*display, cv::Point(rayList[n].first, rayList[n].second), RAY_WIDTH * 2, cv::Scalar(0, 0, 255), -1);
+		return n * stepSize;
 	}
 }
 
@@ -133,29 +214,41 @@ void LocationEstimation::moveRight() {
 }
 
 bool LocationEstimation::canMove(int x, int y) {
+	if (x < 0 || x >= map.cols || y < 0 || y >= map.rows) {
+		return false;
+	}
 	return map.at<cv::Vec3b>(cv::Point(x, y))[0] > 0;
 }
 
+bool LocationEstimation::isBarrier(int x, int y) {
+	if (x < 0 || x >= map.cols || y < 0 || y >= map.rows) {
+		return false;
+	}
+	return map.at<cv::Vec3b>(cv::Point(x, y))[0] == 0;
+}
+
 // Resize to fit the MAX_WIDTH and MAX_HEIGHT, but maintain aspect ratio
-cv::Mat LocationEstimation::resizeImage(cv::Mat img) {
-	cv::Mat resizedImg;
-	double scale = std::max((float) MAX_WIDTH / img.cols,
-			(float) MAX_HEIGHT / img.rows);
-	cv::resize(img, resizedImg, cv::Size(img.cols * scale, img.rows * scale),
+cv::Mat LocationEstimation::resizeDisplay(cv::Mat img, double scale) {
+	cv::circle(img, pos, CURSOR_SIZE / scale, cv::Scalar(255, 0, 0), -1);
+	cv::resize(img, img, cv::Size(img.cols * scale, img.rows * scale),
 			0, 0, cv::INTER_NEAREST);
-	return resizedImg;
+	return img;
 }
 
 int main(int argc, const char *argv[]) {
 
 	// Check arguments
+	double scale = 1;
 	if (argc < 2) {
 		std::cerr << "ERROR No input image provided" << std::endl;
-		std::cout << "Usage: ./main <image path>" << std::endl;
+		std::cout << "Usage: ./main <image path> [scale]" << std::endl;
 		exit(1);
+	}
+	else if (argc >= 3) {
+		scale = std::stod(argv[2]);
 	}
 
 	// Get image path
 	const char* imagePath = argv[1];
-	LocationEstimation::start(imagePath);
+	LocationEstimation::start(imagePath, scale);
 }
