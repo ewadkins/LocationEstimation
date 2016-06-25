@@ -1,0 +1,5 @@
+cmake_minimum_required(VERSION 2.8)
+project( LocationEstimation )
+find_package( OpenCV REQUIRED )
+add_executable( LocationEstimation LocationEstimation.cpp )
+target_link_libraries( LocationEstimation ${OpenCV_LIBS} )
