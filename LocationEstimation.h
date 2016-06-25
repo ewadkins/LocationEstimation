@@ -13,12 +13,20 @@
 #include <opencv2/imgcodecs/imgcodecs.hpp>
 
 #include <iostream>
+#include <vector>
 
 class LocationEstimation {
 public:
 	static const int MAX_WIDTH;
 	static const int MAX_HEIGHT;
+	static cv::Mat map;
+	static cv::Point pos;
 	static void start(const char* imagePath);
+	static void moveUp();
+	static void moveDown();
+	static void moveLeft();
+	static void moveRight();
+	static bool canMove(int x, int y);
 	static cv::Mat resizeImage(cv::Mat img);
 };
 
