@@ -18,30 +18,38 @@
 #include <functional>
 #include <math.h>
 
+#include "Ray.h"
+
 class Simulation {
 public:
-	Simulation(const char* imagePath);
+	Simulation(const char* imagePath, bool allowLocationAccess, bool allowMapAccess);
 	virtual ~Simulation() {}
 	void start();
 	double rayCast(int x, int y, double angle, double maxDist);
-	double rayCast(int x, int y, double angle, double maxDist, cv::Mat* display, double scale);
-	void moveForward();
-	void moveBackward();
+	void registerRay(double angle, double maxDist);
+	cv::Point getPosition();
+	cv::Point getCenterPosition();
+	cv::Mat getMap();
+	int getMapWidth();
+	int getMapHeight();
+	void moveUp();
+	void moveDown();
 	void moveLeft();
 	void moveRight();
-	void moveNorth();
-	void moveSouth();
-	void moveWest();
-	void moveEast();
+	void rotate(double angle);
 	bool canMove(int x, int y);
 	bool isBarrier(int x, int y);
-	//void setKeyListener(std::function<void, int> keyListener);
-	virtual void keyListener(int key);
-	static cv::Mat resizeDisplay(cv::Mat img, double scale);
+	virtual void onStart() = 0;
+	virtual void onData(std::vector<std::pair<Ray, double> > rayMap) = 0;
+	virtual void keyListener(int key) = 0;
+	void kill();
+	void kill(const char* msg);
 private:
 	static int simulationCount;
 
 	int simulationId;
+	const bool locationAccess;
+	const bool mapAccess;
 
 	const char* imagePath;
 
@@ -52,10 +60,10 @@ private:
 
 	int cursorSize;
 
-	int numRays;
-	int maxRayDistance;
+	std::vector<Ray> rays;
+
 	int rayWidth;
-	double rayRotationSpeed;
+	int targetPointSize;
 
 	bool enableRayNoise;
 	bool enableRayFailure;
@@ -65,8 +73,8 @@ private:
 	cv::Mat map;
 	cv::Point pos;
 
-	//void (*keyListener)(int);
-	//std::function<void, int> keyListener;
+	bool _canMove(int x, int y);
+	bool _isBarrier(int x, int y);
 };
 
 #endif /* SIMULATION_H_ */

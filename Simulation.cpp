@@ -9,7 +9,8 @@
 
 int Simulation::simulationCount = 0;
 
-Simulation::Simulation(const char* imagePath) {
+Simulation::Simulation(const char* imagePath, bool allowLocationAccess, bool allowMapAccess)
+			: locationAccess(allowLocationAccess), mapAccess(allowMapAccess) {
 	simulationCount++;
 	this->simulationId = simulationCount;
 	this->imagePath = imagePath;
@@ -21,15 +22,13 @@ Simulation::Simulation(const char* imagePath) {
 
 	cursorSize = 9;
 
-	numRays = 8;
-	maxRayDistance = 150;
 	rayWidth = 2;
-	rayRotationSpeed = 0.0;
+	targetPointSize = 4;
 
-	enableRayNoise = false;
-	enableRayFailure = false;
+	enableRayNoise = true;
+	enableRayFailure = true;
 	rayFailureRate = 0.01;
-	rayMaxNoise = maxRayDistance / 40;
+	rayMaxNoise = 5;
 }
 
 cv::Rect getMaxRectSingleContour(const cv::Mat1b& src) {
@@ -85,7 +84,6 @@ cv::Rect getMaxRect(cv::Mat binaryImg) {
 
 void Simulation::start() {
 	cv::namedWindow("Simulation " + std::to_string(simulationId), CV_WINDOW_AUTOSIZE);
-	cv::namedWindow("observed map", CV_WINDOW_AUTOSIZE);
 
 	std::cout << "Image path: " << imagePath << std::endl;
 
@@ -109,9 +107,7 @@ void Simulation::start() {
 	pos = cv::Point(maxRect.x + (maxRect.width - 1) / 2,
 			maxRect.y + (maxRect.height - 1) / 2);
 
-
-    cv::Mat1f observedMap(map.rows, map.cols, float(0));
-
+	onStart();
 
 	long count = 0;
 	while (true) {
@@ -125,18 +121,36 @@ void Simulation::start() {
 				cv::Size(display.cols * scale, display.rows * scale),
 				0, 0, cv::INTER_NEAREST);
 
-		// Draws rays and get data
-		double offset = -M_PI / 180 * count * rayRotationSpeed;
-		for (int i = 0; i < numRays; i++) {
-			double angle = i * M_PI / numRays * 2+ offset;
-			double dist = rayCast(pos.x, pos.y, angle, maxRayDistance,
-					&display, scale);
-			double targetX = pos.x + 0.5 + std::cos(angle) * dist;
-			double targetY = pos.y + 0.5 + std::sin(angle) * dist;
+		// Gets data from rays and draws them
+		std::vector<std::pair<Ray, double> > rayMap;
+		for (int i = 0; i < rays.size(); i++) {
+			Ray ray = rays[i];
+			cv::Point center = getCenterPosition();
+			double angle = ray.getAngle();
+			double maxDistance = ray.getMaxDistance();
 
+			double dist = rayCast(center.x, center.y, angle, maxDistance);
+			rayMap.push_back(std::pair<Ray, double>(ray, dist));
+
+			double startX = center.x;
+			double startY = center.y;
+			double endX;
+			double endY;
 			if (dist > -1) {
-				observedMap(targetY, targetX) =
-						std::min(1.0, observedMap(targetY, targetX) + 0.25);
+				endX = startX + std::cos(angle) * dist;
+				endY = startY + std::sin(angle) * dist;
+			}
+			else {
+				endX = startX + std::cos(angle) * maxDistance;
+				endY = startY + std::sin(angle) * maxDistance;
+			}
+
+			cv::line(display, cv::Point(startX * scale, startY * scale),
+					cv::Point(endX * scale, endY * scale),
+					cv::Scalar(0, 0, 255), rayWidth, 4);
+			if (dist > -1) {
+				cv::circle(display, cv::Point(endX * scale, endY * scale),
+									targetPointSize, cv::Scalar(0, 0, 255), -1);
 			}
 
 			std::cout << dist << "\t";
@@ -144,11 +158,11 @@ void Simulation::start() {
 		std::cout << std::endl;
 
 		// Draw cursor
-		/*cv::circle(display, cv::Point((pos.x + 0.5) * scale, (pos.y + 0.5) * scale),
-				cursorSize, cv::Scalar(255, 0, 0), -1);*/
-		cv::rectangle(display, cv::Rect((pos.x + 0.5) * scale - cursorSize,
+		cv::circle(display, cv::Point((pos.x + 0.5) * scale, (pos.y + 0.5) * scale),
+				cursorSize, cv::Scalar(255, 0, 0), -1);
+		/*cv::rectangle(display, cv::Rect((pos.x + 0.5) * scale - cursorSize,
 				(pos.y + 0.5) * scale - cursorSize, cursorSize * 2,
-				cursorSize * 2), cv::Scalar(255, 0, 0), -1);
+				cursorSize * 2), cv::Scalar(255, 0, 0), -1);*/
 		if (cursorSize >= 5) {
 			cv::circle(display, cv::Point((pos.x + 0.5) * scale, (pos.y + 0.5) * scale),
 								2, cv::Scalar(0, 0, 255), -1);
@@ -157,12 +171,12 @@ void Simulation::start() {
 		// Display image
 		cv::imshow("Simulation " + std::to_string(simulationId), display);
 
-		cv::imshow("observed map", observedMap);
+		onData(rayMap);
 
 		// Handle keyboard input
 		int key = cv::waitKey(1);
 		if (key > -1) {
-			this->keyListener(key);
+			keyListener(key);
 		}
 
 		count++;
@@ -170,91 +184,62 @@ void Simulation::start() {
 }
 
 double Simulation::rayCast(int x, int y, double angle, double maxDist) {
-	return rayCast(x, y, angle, maxDist, nullptr, 1);
-}
-
-double Simulation::rayCast(int x, int y, double angle, double maxDist,
-		cv::Mat* display, double scale) {
-
-	double stepSize;
-	if (scale >= 1) { // Image had to be enlarged (each position occupies more than 1 pixel)
-		stepSize = 1.0 / scale * std::fmin(scale, rayWidth);
-	}
-	else { // Image had to be reduced in size, so every pixel is fine
-		stepSize = 1.0;
-	}
-	stepSize /= 2; // Step size is at least half the size of a pixel
-
-	std::vector<std::pair<double, double> > rayList;
-	bool failed = false;
+	double stepSize = 0.5;
 	for (int i = 0; i * stepSize <= maxDist; i++) {
 		double dist = i * stepSize;
-		double targetXf = x + 0.5 + std::cos(angle) * dist;
-		double targetYf = y + 0.5 + std::sin(angle) * dist;
-		int targetX = targetXf;
-		int targetY = targetYf;
-		if (display != nullptr) {
-			int scaledX = targetXf * scale;
-			int scaledY = targetYf * scale;
-			rayList.push_back(std::pair<double, double>(scaledX, scaledY));
-		}
-		if (!failed && isBarrier(targetX, targetY)) {
+		int targetX = x + std::cos(angle) * dist;
+		int targetY = y + std::sin(angle) * dist;
+		if (_isBarrier(targetX, targetY)) {
 			if (enableRayFailure && rand() / (RAND_MAX + 1.0) < rayFailureRate) {
-				failed = true;
-				continue;
+				return -1;
 			}
-			for (int j = 0; j < rayList.size(); j++) {
-				cv::rectangle(*display, cv::Rect(rayList[j].first, rayList[j].second, rayWidth, rayWidth), cv::Scalar(100, 100, 255), -1);
-			}
-			double noisyDistance = dist + (enableRayNoise ? 1 : 0)
-					* rand() / (RAND_MAX + 1.0) * rayMaxNoise / scale;
-			double hitX = (x + 0.5 + std::cos(angle) * noisyDistance) * scale;
-			double hitY = (y + 0.5 + std::sin(angle) * noisyDistance) * scale;
-			cv::circle(*display, cv::Point(hitX, hitY), rayWidth * 2, cv::Scalar(0, 0, 255), -1);
-			return noisyDistance;
+			return enableRayNoise ?
+					dist + rand() / (RAND_MAX + 1.0) * rayMaxNoise : dist;
 		}
 	}
-	int n = rayList.size();
 	if (enableRayFailure && rand() / (RAND_MAX + 1.0) < rayFailureRate) {
-		n = rand() / (RAND_MAX + 1.0) * rayList.size();
+		return rand() / (RAND_MAX + 1.0) * maxDist;
 	}
-	for (int j = 0; j < n; j++) {
-		cv::rectangle(*display, cv::Rect(rayList[j].first, rayList[j].second, rayWidth, rayWidth), cv::Scalar(100, 100, 255), -1);
-	}
-	if (n == rayList.size()) {
-		return -1;
-	}
-	else {
-		cv::circle(*display, cv::Point(rayList[n].first, rayList[n].second), rayWidth * 2, cv::Scalar(0, 0, 255), -1);
-		return n * stepSize;
-	}
+	return -1;
 }
 
-void Simulation::moveForward() {
-	if (canMove(pos.x, pos.y - 1)) {
-		pos = cv::Point(pos.x, pos.y - 1);
-	}
+void Simulation::registerRay(double angle, double maxDistance) {
+	Ray ray = Ray(angle, maxDistance);
+	rays.push_back(ray);
 }
 
-void Simulation::moveBackward() {
-	if (canMove(pos.x, pos.y + 1)) {
-		pos = cv::Point(pos.x, pos.y + 1);
-	}
+cv::Point Simulation::getPosition() {
+	if (!locationAccess) kill("Location access not allowed");
+	return pos;
 }
 
-void Simulation::moveLeft() {
-	if (canMove(pos.x - 1, pos.y)) {
-		pos = cv::Point(pos.x - 1, pos.y);
-	}
+cv::Point Simulation::getCenterPosition() {
+	if (!locationAccess) kill("Location access not allowed");
+	return cv::Point(pos.x + 0.5, pos.y + 0.5);
 }
 
-void Simulation::moveRight() {
-	if (canMove(pos.x + 1, pos.y)) {
-		pos = cv::Point(pos.x + 1, pos.y);
-	}
+cv::Mat Simulation::getMap() {
+	if (!mapAccess) kill("Map access not allowed");
+	return map;
+}
+
+int Simulation::getMapWidth() {
+	return map.cols;
+}
+
+int Simulation::getMapHeight() {
+	return map.rows;
 }
 
 bool Simulation::canMove(int x, int y) {
+	if (!mapAccess) kill("Map access not allowed");
+	if (x < 0 || x >= map.cols || y < 0 || y >= map.rows) {
+		return false;
+	}
+	return map.at<cv::Vec3b>(cv::Point(x, y))[0] > 0;
+}
+
+bool Simulation::_canMove(int x, int y) {
 	if (x < 0 || x >= map.cols || y < 0 || y >= map.rows) {
 		return false;
 	}
@@ -262,12 +247,55 @@ bool Simulation::canMove(int x, int y) {
 }
 
 bool Simulation::isBarrier(int x, int y) {
+	if (!mapAccess) kill("Map access not allowed");
 	if (x < 0 || x >= map.cols || y < 0 || y >= map.rows) {
 		return false;
 	}
 	return map.at<cv::Vec3b>(cv::Point(x, y))[0] == 0;
 }
 
-/*void Simulation::setKeyListener(std::function<void(int key)> keyListener) {
-	this->keyListener = keyListener;
-}*/
+bool Simulation::_isBarrier(int x, int y) {
+	if (x < 0 || x >= map.cols || y < 0 || y >= map.rows) {
+		return false;
+	}
+	return map.at<cv::Vec3b>(cv::Point(x, y))[0] == 0;
+}
+
+void Simulation::moveUp() {
+	if (_canMove(pos.x, pos.y - 1)) {
+		pos = cv::Point(pos.x, pos.y - 1);
+	}
+}
+
+void Simulation::moveDown() {
+	if (_canMove(pos.x, pos.y + 1)) {
+		pos = cv::Point(pos.x, pos.y + 1);
+	}
+}
+
+void Simulation::moveLeft() {
+	if (_canMove(pos.x - 1, pos.y)) {
+		pos = cv::Point(pos.x - 1, pos.y);
+	}
+}
+
+void Simulation::moveRight() {
+	if (_canMove(pos.x + 1, pos.y)) {
+		pos = cv::Point(pos.x + 1, pos.y);
+	}
+}
+
+void Simulation::rotate(double angle) {
+	for (int i = 0; i < rays.size(); i++) {
+		rays[i] = Ray(rays[i].getAngle() - angle, rays[i].getMaxDistance());
+	}
+}
+
+void Simulation::kill() {
+	exit(1);
+}
+
+void Simulation::kill(const char* msg) {
+	std::cerr << "KILLING SIMULATION: " + std::string(msg) << std::endl;
+	kill();
+}
