@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 2.8)
-project( LocationEstimation )
+project( RayCastingSimulation )
 find_package( OpenCV REQUIRED )
-add_executable( LocationEstimation LocationEstimation.cpp )
-target_link_libraries( LocationEstimation ${OpenCV_LIBS} )
+add_executable( SpatialMapping SpatialMapping.cpp Simulation.cpp )
+target_link_libraries( SpatialMapping ${OpenCV_LIBS} )
