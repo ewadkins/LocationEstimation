@@ -9,9 +9,12 @@
 
 const bool SpatialMapping::allowLocationAccess = true;
 const bool SpatialMapping::allowMapAccess = false;
+const bool SpatialMapping::allowImageAccess = true;
 
 SpatialMapping::SpatialMapping(const char* imagePath)
-			: Simulation(imagePath, allowLocationAccess, allowMapAccess) {
+			: Simulation(imagePath, allowLocationAccess, allowMapAccess, allowImageAccess) {
+	start = cv::Point(-1, -1);
+	goal = cv::Point(-1, -1);
 }
 
 void SpatialMapping::onStart() {
@@ -24,6 +27,27 @@ void SpatialMapping::onStart() {
 	for (int i = 0; i < numRays; i++) {
 		registerRay(M_PI * i / numRays * 2, maxDistance);
 	}
+
+	std::vector<std::pair<cv::Scalar, cv::Scalar> > ranges;
+	ranges.push_back(std::pair<cv::Scalar, cv::Scalar>(cv::Scalar(100, 127, 127), cv::Scalar(130, 255, 255)));
+	std::vector<std::pair<cv::Point, double> > blueBlobs = getBlobs(ranges);
+
+	ranges.clear();
+	ranges.push_back(std::pair<cv::Scalar, cv::Scalar>(cv::Scalar(45, 127, 127), cv::Scalar(75, 255, 255)));
+	std::vector<std::pair<cv::Point, double> > greenBlobs = getBlobs(ranges);
+
+	if (blueBlobs.size() > 0) {
+		cv::Point startingPosition = blueBlobs[0].first;
+		setStartingPosition(startingPosition.x, startingPosition.y);
+	}
+	if (greenBlobs.size() > 0) {
+		goal = greenBlobs[0].first;
+	}
+	else {
+		kill("Goal not found! Add a green blob to the image.");
+	}
+
+	start = getPosition();
 }
 
 void SpatialMapping::onData(std::vector<std::pair<Ray, double> > rayMap) {
@@ -33,10 +57,13 @@ void SpatialMapping::onData(std::vector<std::pair<Ray, double> > rayMap) {
 		double dist = rayMap[i].second;
 		double angle = ray.getAngle();
 		if (dist > -1) {
-			double targetX = origin.x + std::cos(angle) * dist;
-			double targetY = origin.y + std::sin(angle) * dist;
-			observedMap(targetY, targetX) =
-					std::min(1.0, observedMap(targetY, targetX) + 1.0 / 3);
+			int targetX = origin.x + std::cos(angle) * dist;
+			int targetY = origin.y + std::sin(angle) * dist;
+			if (targetX >= 0 && targetX < observedMap.cols
+					&& targetY >= 0 && targetY < observedMap.rows) {
+				observedMap(targetY, targetX) =
+						std::min(1.0, observedMap(targetY, targetX) + 1.0 / 3);
+			}
 		}
 	}
 
@@ -49,6 +76,22 @@ void SpatialMapping::onData(std::vector<std::pair<Ray, double> > rayMap) {
 
 
 	cv::imshow("Observed Map", display);
+}
+
+void SpatialMapping::onDisplayBackground(cv::Mat display, double scale) {
+	int size = 7;
+	cv::circle(display, cv::Point(start.x * scale, start.y * scale), size, cv::Scalar(255, 127, 0), -1);
+	cv::circle(display, cv::Point(goal.x * scale, goal.y * scale), size, cv::Scalar(0, 255, 0), -1);
+	cv::circle(display, cv::Point(start.x * scale, start.y * scale), size, cv::Scalar(0, 0, 0), 2);
+	cv::circle(display, cv::Point(goal.x * scale, goal.y * scale), size, cv::Scalar(0, 0, 0), 2);
+
+	/*cv::rectangle(display, cv::Rect(start.x * scale - size, start.y * scale - size, size * 2, size * 2), cv::Scalar(255, 127, 0), -1);
+	cv::rectangle(display, cv::Rect(goal.x * scale - size, goal.y * scale - size, size * 2, size * 2), cv::Scalar(0, 255, 0), -1);
+	cv::rectangle(display, cv::Rect(start.x * scale - size, start.y * scale - size, size * 2, size * 2), cv::Scalar(0, 0, 0), 2);
+	cv::rectangle(display, cv::Rect(goal.x * scale - size, goal.y * scale - size, size * 2, size * 2), cv::Scalar(0, 0, 0), 2);*/
+}
+
+void SpatialMapping::onDisplayForeground(cv::Mat display, double scale) {
 }
 
 void SpatialMapping::keyListener(int key) {

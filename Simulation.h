@@ -22,7 +22,7 @@
 
 class Simulation {
 public:
-	Simulation(const char* imagePath, bool allowLocationAccess, bool allowMapAccess);
+	Simulation(const char* imagePath, bool allowLocationAccess, bool allowMapAccess, bool allowImageAccess);
 	virtual ~Simulation() {}
 	void start();
 	double rayCast(int x, int y, double angle, double maxDist);
@@ -32,6 +32,7 @@ public:
 	cv::Mat getMap();
 	int getMapWidth();
 	int getMapHeight();
+	void setStartingPosition(int x, int y);
 	void moveUp();
 	void moveDown();
 	void moveLeft();
@@ -39,8 +40,11 @@ public:
 	void rotate(double angle);
 	bool canMove(int x, int y);
 	bool isBarrier(int x, int y);
+	std::vector<std::pair<cv::Point, double> > getBlobs(std::vector<std::pair<cv::Scalar, cv::Scalar> > ranges);
 	virtual void onStart() = 0;
 	virtual void onData(std::vector<std::pair<Ray, double> > rayMap) = 0;
+	virtual void onDisplayBackground(cv::Mat display, double scale) = 0;
+	virtual void onDisplayForeground(cv::Mat display, double scale) = 0;
 	virtual void keyListener(int key) = 0;
 	void kill();
 	void kill(const char* msg);
@@ -50,6 +54,11 @@ private:
 	int simulationId;
 	const bool locationAccess;
 	const bool mapAccess;
+	const bool imageAccess;
+
+	int state;
+	static const int STARTING;
+	static const int STARTED;
 
 	const char* imagePath;
 
@@ -70,6 +79,7 @@ private:
 	double rayFailureRate;
 	double rayMaxNoise;
 
+	cv::Mat srcImg;
 	cv::Mat map;
 	cv::Point pos;
 

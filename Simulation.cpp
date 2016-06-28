@@ -9,16 +9,21 @@
 
 int Simulation::simulationCount = 0;
 
-Simulation::Simulation(const char* imagePath, bool allowLocationAccess, bool allowMapAccess)
-			: locationAccess(allowLocationAccess), mapAccess(allowMapAccess) {
+const int Simulation::STARTING = 0;
+const int Simulation::STARTED = 1;
+
+Simulation::Simulation(const char* imagePath, bool allowLocationAccess, bool allowMapAccess, bool allowImageAccess)
+			: locationAccess(allowLocationAccess), mapAccess(allowMapAccess), imageAccess(allowImageAccess) {
 	simulationCount++;
 	this->simulationId = simulationCount;
 	this->imagePath = imagePath;
 
+	state = STARTING;
+
 	maxWindowWidth = 600;
 	maxWindowHeight = 400;
 
-	desiredMapSize = 400 * 400;
+	desiredMapSize = 200 * 200;
 
 	cursorSize = 9;
 
@@ -88,15 +93,19 @@ void Simulation::start() {
 	std::cout << "Image path: " << imagePath << std::endl;
 
 	// Load source image, and scale to desired map size
-	cv::Mat srcImg = cv::imread(imagePath, cv::IMREAD_UNCHANGED);
-	double scale = std::sqrt(desiredMapSize / (srcImg.cols * srcImg.rows));
+	srcImg = cv::imread(imagePath, cv::IMREAD_UNCHANGED);
+	double scale = std::sqrt((float) desiredMapSize / (srcImg.cols * srcImg.rows));
 	cv::resize(srcImg, srcImg, cv::Size(srcImg.cols * scale, srcImg.rows * scale), 0, 0, cv::INTER_NEAREST);
 	std::cout << srcImg.cols << " x " << srcImg.rows << std::endl;
 
 	// Create grayscale and then black and white image
-	cv::Mat grayImg;
-	cv::cvtColor(srcImg, grayImg, cv::COLOR_BGR2GRAY);
-	cv::Mat binaryImg = grayImg > 128;
+	//cv::Mat grayImg;
+	//cv::cvtColor(srcImg, grayImg, cv::COLOR_BGR2GRAY);
+	cv::Mat hsv;
+	cv::cvtColor(srcImg, hsv, cv::COLOR_BGR2HSV);
+	cv::Mat binaryImg;
+	cv::inRange(hsv, cv::Scalar(0, 0, 0), cv::Scalar(180, 255, 50), binaryImg);
+	binaryImg = ~binaryImg;
 
 	// Save copy of the map
 	cv::cvtColor(binaryImg, map, cv::COLOR_GRAY2BGR);
@@ -108,6 +117,7 @@ void Simulation::start() {
 			maxRect.y + (maxRect.height - 1) / 2);
 
 	onStart();
+	state = STARTED;
 
 	long count = 0;
 	while (true) {
@@ -120,6 +130,8 @@ void Simulation::start() {
 		cv::resize(display, display,
 				cv::Size(display.cols * scale, display.rows * scale),
 				0, 0, cv::INTER_NEAREST);
+
+		onDisplayBackground(display, scale);
 
 		// Gets data from rays and draws them
 		std::vector<std::pair<Ray, double> > rayMap;
@@ -167,6 +179,8 @@ void Simulation::start() {
 			cv::circle(display, cv::Point((pos.x + 0.5) * scale, (pos.y + 0.5) * scale),
 								2, cv::Scalar(0, 0, 255), -1);
 		}
+
+		onDisplayForeground(display, scale);
 
 		// Display image
 		cv::imshow("Simulation " + std::to_string(simulationId), display);
@@ -261,6 +275,18 @@ bool Simulation::_isBarrier(int x, int y) {
 	return map.at<cv::Vec3b>(cv::Point(x, y))[0] == 0;
 }
 
+void Simulation::setStartingPosition(int x, int y) {
+	if (state == STARTING) {
+		if (_canMove(x, y)) {
+			pos.x = x;
+			pos.y = y;
+		}
+	}
+	else {
+		kill("Cannot set starting position, simulation has already started");
+	}
+}
+
 void Simulation::moveUp() {
 	if (_canMove(pos.x, pos.y - 1)) {
 		pos = cv::Point(pos.x, pos.y - 1);
@@ -291,6 +317,56 @@ void Simulation::rotate(double angle) {
 	}
 }
 
+bool compareArea(std::pair<cv::Point, double> a, std::pair<cv::Point, double> b) {
+	return a.second > b.second;
+}
+
+std::vector<std::pair<cv::Point, double> > Simulation::getBlobs(std::vector<std::pair<cv::Scalar, cv::Scalar> > ranges) {
+	if (!imageAccess) kill("Image access not allowed");
+
+	cv::Mat blurred;
+	cv::medianBlur(srcImg, blurred, 3);
+	//cv::namedWindow("Thresholded", CV_WINDOW_AUTOSIZE);
+	cv::Mat hsv;
+	cv::cvtColor(blurred, hsv, cv::COLOR_BGR2HSV);
+
+	cv::Mat thresholded(hsv.rows, hsv.cols, CV_8UC1, cv::Vec3b(0, 0, 0));
+	for (int i = 0; i < ranges.size(); i++) {
+		cv::Mat img;
+		cv::inRange(hsv, ranges[i].first, ranges[i].second, img);
+		cv::addWeighted(thresholded, 1.0, img, 1.0, 0.0, thresholded);
+	}
+	//cv::imshow("Thresholded", thresholded);
+	//cv::waitKey(0);
+
+	//cv::Mat display;
+	//cv::cvtColor(thresholded, display, CV_GRAY2BGR);
+
+	std::vector<std::vector<cv::Point> > contours;
+	cv::findContours(thresholded, contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
+
+	std::vector<cv::Moments> m(contours.size());
+	for (int i = 0; i < contours.size(); i++) {
+		m[i] = moments(contours[i], false);
+	}
+
+	///  Get the mass centers:
+	std::vector<std::pair<cv::Point, double> > contourAreaMap;
+	for (int i = 0; i < contours.size(); i++) {
+		cv::Point center = cv::Point(m[i].m10 / m[i].m00 , m[i].m01 / m[i].m00);
+		double area = m[i].m00;
+		contourAreaMap.push_back(std::pair<cv::Point, double>(center, area));
+		//cv::circle(display, center, std::sqrt(area), cv::Scalar(0, 0, 255), 2);
+	}
+
+	std::sort(contourAreaMap.begin(), contourAreaMap.end(), compareArea);
+
+
+	//cv::imshow("Thresholded", display);
+	//cv::waitKey(0);
+
+	return contourAreaMap;
+}
 void Simulation::kill() {
 	exit(1);
 }
