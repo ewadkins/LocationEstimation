@@ -27,14 +27,19 @@ public:
 	void onDisplayBackground(cv::Mat display, double scale);
 	void onDisplayForeground(cv::Mat display, double scale);
 	void keyListener(int key);
-	std::vector<cv::Point> findPath(cv::Mat1f map, cv::Point start, cv::Point goal);
+	static std::vector<cv::Point> findPath(cv::Mat1f map, cv::Point start, cv::Point goal, int margin);
 private:
 	static const bool allowLocationAccess;
 	static const bool allowMapAccess;
 	static const bool allowImageAccess;
 
+	static const int margin;
+
 	cv::Point start;
 	cv::Point goal;
+
+	std::string filePath;
+	cv::VideoWriter output;
 };
 
 #endif /* SPATIALMAPPING_H_ */

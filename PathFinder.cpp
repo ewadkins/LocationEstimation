@@ -11,8 +11,11 @@ const bool PathFinder::allowLocationAccess = true;
 const bool PathFinder::allowMapAccess = false;
 const bool PathFinder::allowImageAccess = true;
 
+const int PathFinder::margin = 4;
+
 PathFinder::PathFinder(const char* imagePath)
 			: Simulation(imagePath, allowLocationAccess, allowMapAccess, allowImageAccess) {
+	filePath = std::string(imagePath);
 	start = cv::Point(-1, -1);
 	goal = cv::Point(-1, -1);
 	path = std::vector<cv::Point>();
@@ -21,9 +24,10 @@ PathFinder::PathFinder(const char* imagePath)
 void PathFinder::onStart() {
 	observedMap = cv::Mat1f(getMapHeight(), getMapWidth(), float(1));
 	cv::namedWindow("Observed Map", CV_WINDOW_AUTOSIZE);
+	cv::namedWindow("Barrier map", CV_WINDOW_AUTOSIZE);
 
 	int numRays = 12;
-	double maxDistance = 100;
+	double maxDistance = 50;
 
 	for (int i = 0; i < numRays; i++) {
 		registerRay(M_PI * i / numRays * 2, maxDistance);
@@ -49,10 +53,12 @@ void PathFinder::onStart() {
 	}
 
 	start = getPosition();
+	path = findPath(observedMap, getPosition(), goal, margin);
 }
 
 void PathFinder::onData(std::vector<std::pair<Ray, double> > rayMap) {
 	cv::Point origin = getCenterPosition();
+	bool blocked = false;
 	for (int i = 0; i < rayMap.size(); i++) {
 		Ray ray = rayMap[i].first;
 		double dist = rayMap[i].second;
@@ -63,18 +69,70 @@ void PathFinder::onData(std::vector<std::pair<Ray, double> > rayMap) {
 			if (targetX >= 0 && targetX < observedMap.cols
 					&& targetY >= 0 && targetY < observedMap.rows) {
 				observedMap(targetY, targetX) =
-						std::max(0.0, observedMap(targetY, targetX) - 1.0 / 3);
+						std::max(0.0, observedMap(targetY, targetX) - 0.5);
+				if (observedMap(targetY, targetX) == 0) {
+					for (int j = 0; j < path.size(); j++) {
+						int x = path[j].x;
+						int y = path[j].y;
+						if (targetX >= x - margin && targetX <= x + margin
+								&& targetY >= y - margin && targetY <= y + margin) {
+							blocked = true;
+							break;
+						}
+					}
+				}
 			}
 		}
 	}
+	if (blocked) {
+		std::cout << "Finding new path" << std::endl;
+		path = findPath(observedMap, getPosition(), goal, margin);
+	}
 
-	double rotateSpeed = 1.0;
+	/*bool blocked = false;
+	for (int i = 0; i < path.size(); i++) {
+		int x = path[i].x;
+		int y = path[i].y;
+		for (int j = std::max(0, x - margin); j < std::min(x + margin, observedMap.cols); j++) {
+			for (int k = std::max(0, y - margin); k < std::min(y + margin, observedMap.rows); k++) {
+				if (observedMap(j, k) > 0) {
+					blocked = true;
+					break;
+				}
+			}
+			if (blocked) break;
+		}
+		if (blocked) break;
+	}
+
+	if (blocked || path.size() == 0) {
+		path = findPath(observedMap, getPosition(), goal, margin);
+	}*/
+
+	//path = findPath(observedMap, getPosition(), goal, margin);
+
+	double rotateSpeed = 2.0;
 	rotate(M_PI / 180 * rotateSpeed);
+	if (path.size() == 1) {
+		std::cout << "Finished!" << std::endl;
+
+		output.release();
+
+		cv::waitKey(0);
+		exit(0);
+	}
+	if (path.size() > 0) {
+		path.pop_back();
+		if (move(path[path.size() - 1].x, path[path.size() - 1].y)) {
+		}
+		else {
+			std::cout << "CRASHED" << std::endl;
+		}
+	}
 
 	cv::Mat display;
 	cv::cvtColor(observedMap, display, CV_GRAY2BGR);
 	cv::circle(display, origin, 3, cv::Scalar(0, 255, 0), -1);
-
 
 	cv::imshow("Observed Map", display);
 }
@@ -103,6 +161,13 @@ void PathFinder::onDisplayBackground(cv::Mat display, double scale) {
 }
 
 void PathFinder::onDisplayForeground(cv::Mat display, double scale) {
+	if (!output.isOpened()) {
+		int index = filePath.find_last_of(".");
+		    filePath = index == std::string::npos ? filePath : filePath.substr(0, index);
+		output.open(filePath + ".avi", CV_FOURCC('M','J','P','G'), 20,
+				cv::Size(display.cols, display.rows), true);
+	}
+	output.write(display);
 }
 
 void PathFinder::keyListener(int key) {
@@ -128,22 +193,45 @@ void PathFinder::keyListener(int key) {
 		cv::waitKey(0);
 		exit(1);*/
 
-		path = findPath(observedMap, getPosition(), goal);
+		//path = findPath(observedMap, getPosition(), goal);
 	}
 	switch(key) {
-	case 63232: moveUp(); break; // up
+	/*case 63232: moveUp(); break; // up
 	case 63233: moveDown(); break; // down
 	case 63234: moveLeft(); break; // left
-	case 63235: moveRight(); break; // right
+	case 63235: moveRight(); break; // right*/
 	case 27: exit(1); break; // esc
-	case 'g': break;
+	//case 'g': break;
 	default: std::cout << "Key pressed: " << key << std::endl;
 	}
 }
 
-std::vector<cv::Point> PathFinder::findPath(cv::Mat1f map, cv::Point start, cv::Point goal) {
+std::vector<cv::Point> PathFinder::findPath(cv::Mat1f map, cv::Point start, cv::Point goal, int margin) {
 	if (map.channels() != 1)
 		throw std::invalid_argument("Map must have only 1 channel.");
+
+	cv::Mat1f barrierMap = map.clone();
+
+	for (int x = 0; x < map.rows; x++) {
+		for (int y = 0; y < map.cols; y++) {
+			bool barrier = false;
+			for (int l = std::max(0, x - margin); l <= std::min(x + margin, map.rows - 1); l++) {
+				for (int m = std::max(0, y - margin); m <= std::min(y + margin, map.cols - 1); m++) {
+					if (map(l, m) == 0) {
+						barrier = true;
+						barrierMap(x, y) = 0;
+						break;
+					}
+				}
+				if (barrier) break;
+			}
+		}
+	}
+
+	//cv::namedWindow("Barrier map", CV_WINDOW_AUTOSIZE);
+	cv::imshow("Barrier map", barrierMap);
+	cv::waitKey(10);
+	//cv::destroyWindow("Barrier map");
 
 	std::pair<int, int> startPair = std::pair<int, int>(start.x, start.y);
 	std::pair<int, int> goalPair = std::pair<int, int>(goal.x, goal.y);
@@ -198,7 +286,7 @@ std::vector<cv::Point> PathFinder::findPath(cv::Mat1f map, cv::Point start, cv::
 				current = cameFrom[current];
 				path.push_back(cv::Point(current.first, current.second));
 			}
-			return path;
+			return path; // returns path in reverse order (from goal to start)
 		}
 
 		openSet.erase(currentPtr);
@@ -207,8 +295,9 @@ std::vector<cv::Point> PathFinder::findPath(cv::Mat1f map, cv::Point start, cv::
 		for (int k = 0; k < n; k++) {
 			int nx = current.first + dx[indices[k]];
 			int ny = current.second + dy[indices[k]];
-			if (nx >= 0 && nx < map.rows && ny >= 0 && ny < map.cols
-					&& (map(ny, nx) > 0)) {
+			if ((nx >= 0 && nx < barrierMap.rows && ny >= 0 && ny < barrierMap.cols && barrierMap(ny, nx) > 0)) {
+				//map(nx, ny) = 0.5;
+
 				std::pair<int, int> neighbor(nx, ny);
 				if (closedSet.find(neighbor) != closedSet.end()) {
 					continue;

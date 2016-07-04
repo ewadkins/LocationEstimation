@@ -33,10 +33,11 @@ public:
 	int getMapWidth();
 	int getMapHeight();
 	void setStartingPosition(int x, int y);
-	void moveUp();
-	void moveDown();
-	void moveLeft();
-	void moveRight();
+	bool move(int x, int y);
+	bool moveUp();
+	bool moveDown();
+	bool moveLeft();
+	bool moveRight();
 	void rotate(double angle);
 	bool canMove(int x, int y);
 	bool isBarrier(int x, int y);

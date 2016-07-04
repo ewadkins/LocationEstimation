@@ -30,10 +30,10 @@ Simulation::Simulation(const char* imagePath, bool allowLocationAccess, bool all
 	rayWidth = 2;
 	targetPointSize = 4;
 
-	enableRayNoise = true;
-	enableRayFailure = true;
+	enableRayNoise = false;
+	enableRayFailure = false;
 	rayFailureRate = 0.01;
-	rayMaxNoise = 5;
+	rayMaxNoise = 2;
 }
 
 cv::Rect getMaxRectSingleContour(const cv::Mat1b& src) {
@@ -250,14 +250,14 @@ bool Simulation::canMove(int x, int y) {
 	if (x < 0 || x >= map.cols || y < 0 || y >= map.rows) {
 		return false;
 	}
-	return map.at<cv::Vec3b>(cv::Point(x, y))[0] > 0;
+	return map.at<cv::Vec3b>(cv::Point(x, y)) != cv::Vec3b(0, 0, 0);
 }
 
 bool Simulation::_canMove(int x, int y) {
 	if (x < 0 || x >= map.cols || y < 0 || y >= map.rows) {
 		return false;
 	}
-	return map.at<cv::Vec3b>(cv::Point(x, y))[0] > 0;
+	return map.at<cv::Vec3b>(cv::Point(x, y)) != cv::Vec3b(0, 0, 0);
 }
 
 bool Simulation::isBarrier(int x, int y) {
@@ -265,14 +265,14 @@ bool Simulation::isBarrier(int x, int y) {
 	if (x < 0 || x >= map.cols || y < 0 || y >= map.rows) {
 		return false;
 	}
-	return map.at<cv::Vec3b>(cv::Point(x, y))[0] == 0;
+	return map.at<cv::Vec3b>(cv::Point(x, y)) == cv::Vec3b(0, 0, 0);
 }
 
 bool Simulation::_isBarrier(int x, int y) {
 	if (x < 0 || x >= map.cols || y < 0 || y >= map.rows) {
 		return false;
 	}
-	return map.at<cv::Vec3b>(cv::Point(x, y))[0] == 0;
+	return map.at<cv::Vec3b>(cv::Point(x, y)) == cv::Vec3b(0, 0, 0);
 }
 
 void Simulation::setStartingPosition(int x, int y) {
@@ -287,28 +287,44 @@ void Simulation::setStartingPosition(int x, int y) {
 	}
 }
 
-void Simulation::moveUp() {
+bool Simulation::move(int x, int y) {
+	if (_canMove(x, y)) {
+		pos = cv::Point(x, y);
+		return true;
+	}
+	return false;
+}
+
+bool Simulation::moveUp() {
 	if (_canMove(pos.x, pos.y - 1)) {
 		pos = cv::Point(pos.x, pos.y - 1);
+		return true;
 	}
+	return false;
 }
 
-void Simulation::moveDown() {
+bool Simulation::moveDown() {
 	if (_canMove(pos.x, pos.y + 1)) {
 		pos = cv::Point(pos.x, pos.y + 1);
+		return true;
 	}
+	return false;
 }
 
-void Simulation::moveLeft() {
+bool Simulation::moveLeft() {
 	if (_canMove(pos.x - 1, pos.y)) {
 		pos = cv::Point(pos.x - 1, pos.y);
+		return true;
 	}
+	return false;
 }
 
-void Simulation::moveRight() {
+bool Simulation::moveRight() {
 	if (_canMove(pos.x + 1, pos.y)) {
 		pos = cv::Point(pos.x + 1, pos.y);
+		return true;
 	}
+	return false;
 }
 
 void Simulation::rotate(double angle) {
